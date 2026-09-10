@@ -1,0 +1,3 @@
+{
+  "_comment": "O projeto usa eslint.config.js (flat config) como configuração efetiva do ESLint 9. Este arquivo permanece apenas para compatibilidade/documentação da estrutura inicialmente especificada no PRD."
+}

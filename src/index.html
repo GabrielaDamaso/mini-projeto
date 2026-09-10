@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#17191b">
+  <title>Conversor de Temperaturas</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="console" aria-labelledby="page-title">
+    <header class="topbar">
+      <div class="brand-lockup">
+        <span class="brand-mark" aria-hidden="true">°</span>
+        <div>
+          <p class="eyebrow">Instrumento 01</p>
+          <h1 id="page-title">Conversor de Temperaturas</h1>
+        </div>
+      </div>
+      <p class="mode-label"><span class="status-dot" aria-hidden="true"></span> Celsius <span aria-hidden="true">↔</span> Fahrenheit</p>
+    </header>
+
+    <section class="workspace" aria-label="Painel de conversão">
+      <section class="readout-panel" aria-labelledby="readout-title">
+        <div class="panel-heading">
+          <p class="eyebrow">Saída principal</p>
+          <p id="signal-state" class="signal-state">Pronto</p>
+        </div>
+        <div class="readout" aria-live="polite">
+          <output id="display-value" class="display-value" for="temperature">--</output>
+          <span id="display-unit" class="display-unit">°C</span>
+        </div>
+        <h2 id="readout-title">Leitura aguardando entrada</h2>
+        <p id="readout-message" class="readout-message">Insira um valor e arme a conversão.</p>
+        <p class="readout-note">Precisão de saída: 2 casas decimais</p>
+        <div class="readout-footer">
+          <span>Escala ativa</span>
+          <span id="scale-label">C → F</span>
+        </div>
+      </section>
+
+      <section class="control-panel" aria-labelledby="control-title">
+        <div class="panel-heading">
+          <p class="eyebrow">Controles</p>
+          <p class="control-index">01 / 01</p>
+        </div>
+        <h2 id="control-title">Defina o sinal</h2>
+        <p class="panel-intro">Escolha a escala de origem, a escala de destino e confirme.</p>
+
+        <form id="temperature-form">
+          <div class="field field-wide">
+            <label for="temperature">Temperatura de entrada</label>
+            <div class="input-wrap">
+              <input id="temperature" name="temperature" type="number" step="any" placeholder="25" inputmode="decimal">
+              <span aria-hidden="true">°</span>
+            </div>
+          </div>
+
+          <div class="unit-grid">
+            <div class="field">
+              <label for="from-unit">Origem</label>
+              <select id="from-unit" name="from-unit">
+                <option value="C">Celsius (°C)</option>
+                <option value="F">Fahrenheit (°F)</option>
+              </select>
+            </div>
+            <div class="transfer-mark" aria-hidden="true">→</div>
+            <div class="field">
+              <label for="to-unit">Destino</label>
+              <select id="to-unit" name="to-unit">
+                <option value="F">Fahrenheit (°F)</option>
+                <option value="C">Celsius (°C)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button type="submit" class="primary-action"><span>Converter</span><span aria-hidden="true">↗</span></button>
+            <button type="button" id="clear-button" class="secondary-action">Limpar</button>
+          </div>
+        </form>
+
+        <p id="result" class="sr-only" role="status" hidden></p>
+        <p id="error" class="error" role="alert" hidden></p>
+      </section>
+    </section>
+
+    <ol class="step-rail" aria-label="Etapas da conversão">
+      <li class="step is-active" data-step="input"><span class="step-light" aria-hidden="true"></span><span>Entrada</span></li>
+      <li class="step" data-step="source"><span class="step-light" aria-hidden="true"></span><span>Origem</span></li>
+      <li class="step" data-step="convert"><span class="step-light" aria-hidden="true"></span><span>Conversão</span></li>
+      <li class="step" data-step="target"><span class="step-light" aria-hidden="true"></span><span>Resultado</span></li>
+    </ol>
+
+    <footer class="footer-bar">
+      <span>Conversor de Temperaturas</span>
+      <span>Precisão confiável, leitura imediata</span>
+    </footer>
+  </main>
+  <script src="./converter.js"></script>
+  <script src="./script.js"></script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "source": "src/style.css",
+  "system": "The Temperature Rhythm Console",
+  "motion": {
+    "entrance": "lift-in 650-700ms ease-out",
+    "result": "result-pulse 560ms ease-out",
+    "reducedMotion": "animations collapse to near-zero duration"
+  },
+  "focus": {
+    "ring": "0 0 0 2px rgb(159 215 210 / 18%)",
+    "color": "#9fd7d2"
+  },
+  "surfaces": {
+    "page": "#17191b",
+    "readout": "#222527",
+    "controls": "#2b2f31"
+  },
+  "stateColors": {
+    "ready": "#ffb547",
+    "action": "#ff806e",
+    "complete": "#9fd7d2",
+    "error": "#ff806e",
+    "inactive": "#414548"
+  },
+  "responsive": {
+    "desktop": "workspace grid at 1.25fr / 0.75fr",
+    "mobileBreakpoint": "720px",
+    "mobile": "single-column workspace with horizontal step rail"
+  }
+}

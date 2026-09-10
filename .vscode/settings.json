@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^& 'C:\\\\Users\\\\gabri\\\\\\.agents\\\\skills\\\\impeccable\\\\scripts\\\\impeccable\\.cmd' detect --json 'src/index\\.html' 'src/style\\.css' 'src/script\\.js'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

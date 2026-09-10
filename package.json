@@ -1,0 +1,22 @@
+{
+  "name": "conversor-temperaturas",
+  "version": "1.0.0",
+  "description": "Mini projeto web para conversão entre Celsius e Fahrenheit.",
+  "main": "src/script.js",
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "lint": "eslint . --ext .js",
+    "check": "npm run lint && npm run test:coverage"
+  },
+  "devDependencies": {
+    "eslint": "^9.35.0",
+    "jest": "^30.1.3",
+    "jest-environment-jsdom": "^30.1.2",
+    "@eslint/js": "^9.35.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
