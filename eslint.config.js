@@ -27,7 +27,8 @@ module.exports = [
         describe: 'readonly',
         test: 'readonly',
         expect: 'readonly',
-        beforeEach: 'readonly'
+        beforeEach: 'readonly',
+        require: 'readonly'
       }
     },
     rules: {

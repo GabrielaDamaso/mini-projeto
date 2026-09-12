@@ -1,6 +1,6 @@
 const { convertTemperature, formatTemperature } = require('../src/converter');
 //console.log(`estou entrando com ${value} de ${from} para ${to}`);
-  //estou entrando com 250 de F para C
+//estou entrando com 250 de F para C
 describe('convertTemperature', () => {
   test('converte Celsius para Fahrenheit', () => {
     expect(convertTemperature(25, 'C', 'F')).toBe(77);
