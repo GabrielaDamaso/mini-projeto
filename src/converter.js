@@ -30,10 +30,12 @@ function formatTemperature(value) {
   return Number(value.toFixed(2));
 }
 
+/* istanbul ignore next -- exportação CommonJS depende do ambiente de execução. */
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { convertTemperature, formatTemperature };
 }
 
+/* istanbul ignore next -- exportação para navegador depende do ambiente de execução. */
 if (typeof window !== 'undefined') {
   window.temperatureConverter = { convertTemperature, formatTemperature };
 }
