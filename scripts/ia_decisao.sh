@@ -58,7 +58,7 @@ suffix = "\n</dados>"
 data_limit = max(0, 6000 - len(prefix) - len(suffix))
 prompt = prefix + data[:data_limit] + suffix
 request = {
-    "model": os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
+    "model": os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b"),
     "temperature": 0,
     "messages": [{"role": "user", "content": prompt}],
 }

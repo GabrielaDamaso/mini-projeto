@@ -34,7 +34,7 @@ prompt = (
     + attack
 )
 request = {
-    "model": os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
+    "model": os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b"),
     "temperature": 0,
     "messages": [{"role": "user", "content": prompt}],
 }

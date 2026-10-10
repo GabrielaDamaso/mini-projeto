@@ -62,6 +62,7 @@ O laboratório mantém o conversor estático e simula dois servidores locais no 
 - `.github/workflows/prompt-injection.yml`: executa manualmente as três comparações e publica as respostas realmente observadas como artefato.
 - Inicie cada execução manual em **GitHub → Actions → workflow → Run workflow**. Examine o Summary para métricas, decisão, justificativa, regra responsável e eventual bloqueio/rollback; os JSONs ficam nos artefatos do run.
 - Para usar Groq, cadastre `GROQCLOUD_API_KEY` em **Settings → Secrets and variables → Actions → New repository secret**. Nunca inclua a chave em arquivos, comandos salvos ou logs; sem chave ou em caso de erro a decisão usa a opção segura.
+- Os scripts usam por padrão o modelo Groq `openai/gpt-oss-120b`; pode-se escolher outro modelo ativo definindo `GROQ_MODEL` no ambiente do workflow. Verifique o catálogo e as depreciações da Groq antes de trocar o modelo.
 - Para exigir revisão humana, configure **Settings → Environments → New environment → `producao` → Required reviewers**. A aprovação precisa ser configurada manualmente no GitHub.
 - Blue/Green e Canary precisam de pelo menos dois commits na branch, pois a versão estável usa `HEAD~1`. `com_falha` e `lentidao` são simulações isoladas dos workflows; a latência é aplicada somente pelo servidor de laboratório.
 - Para iniciar o servidor local: `python3 scripts/servidor_estatico.py --port 8001 --directory src`; encerre com `Ctrl+C`. Os comandos locais de qualidade continuam sendo `npm run lint`, `npm test`, `npm run test:coverage` e `npm run check`.
