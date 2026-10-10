@@ -65,13 +65,25 @@ request = {
 Path(request_path).write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
 PY
   then
-    if curl --silent --show-error --fail --max-time 30 \
+    curl_status=0
+    http_status="$(curl --silent --show-error --max-time 30 \
       --request POST 'https://api.groq.com/openai/v1/chat/completions' \
       --header "Authorization: Bearer ${GROQCLOUD_API_KEY}" \
       --header 'Content-Type: application/json' \
       --data-binary "@${temporary_directory}/request.json" \
       --output "${temporary_directory}/response.json" \
-      2>"${temporary_directory}/curl-error.log"; then
+      --write-out '%{http_code}' \
+      2>"${temporary_directory}/curl-error.log")" || curl_status=$?
+
+    if (( curl_status != 0 )); then
+      if (( curl_status == 28 )); then
+        fallback_reason='Timeout ao consultar Groq (curl exit 28); aplicada a opção segura.'
+      else
+        fallback_reason="Falha de transporte ao consultar Groq (curl exit ${curl_status}); aplicada a opção segura."
+      fi
+    elif [[ ! "$http_status" =~ ^2[0-9][0-9]$ ]]; then
+      fallback_reason="Groq retornou HTTP ${http_status:-desconhecido}; aplicada a opção segura."
+    else
       if python3 - "$temporary_directory/response.json" "$temporary_directory/decision.txt" "${allowed_options[*]}" <<'PY'
 import json
 import sys
@@ -103,8 +115,6 @@ PY
       else
         fallback_reason='Resposta da API fora do formato ou das opções permitidas; aplicada a opção segura.'
       fi
-    else
-      fallback_reason='Falha ou timeout ao consultar Groq; aplicada a opção segura.'
     fi
   else
     fallback_reason='Não foi possível preparar a solicitação; aplicada a opção segura.'
