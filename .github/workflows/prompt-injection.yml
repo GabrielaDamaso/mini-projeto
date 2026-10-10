@@ -1,0 +1,41 @@
+name: Comparar defesas contra prompt injection
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  comparison:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Executar três abordagens com Groq
+        env:
+          GROQCLOUD_API_KEY: ${{ secrets.GROQCLOUD_API_KEY }}
+        run: |
+          bash scripts/teste_prompt_injection.sh prompt-injection-resultados.md
+
+      - name: Guardar resultados observados
+        uses: actions/upload-artifact@v4
+        with:
+          name: resultados-prompt-injection
+          path: prompt-injection-resultados.md
+          if-no-files-found: error
+
+      - name: Registrar link para o run
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## Evidência de prompt injection"
+            echo
+            echo "As três abordagens foram executadas contra a API Groq. Baixe o artefato \`resultados-prompt-injection\` para consultar as respostas observadas."
+            echo
+            echo "Run: ${RUN_URL}"
+            echo
+            echo "A resposta do modelo pode variar; este resultado não é uma garantia de segurança."
+          } >> "$GITHUB_STEP_SUMMARY"
