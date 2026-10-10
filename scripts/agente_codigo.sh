@@ -196,6 +196,7 @@ while (( tries < 3 )); do
   tries=$((tries + 1))
   request_file="$temporary_directory/request-${tries}.json"
   response_file="$temporary_directory/response-${tries}.json"
+  response_headers="$temporary_directory/response-${tries}.headers"
   proposal_file="$temporary_directory/proposal-${tries}.txt"
 
   if ! python3 - "$target_path" "$error_file" "$request_file" "$mission" "$objective" "$model" "${context_files[@]}" <<'PY'
@@ -277,6 +278,7 @@ PY
         --header "@$auth_header_file" \
         --header 'Content-Type: application/json' \
         --data-binary "@$request_file" \
+        --dump-header "$response_headers" \
         --output "$response_file" \
         --write-out '%{http_code}' \
         2>"$temporary_directory/curl-${tries}.log")" || curl_status=$?
@@ -417,8 +419,49 @@ PY
   fi
   if (( tries < 3 )); then
     case "$last_error" in
-      *"HTTP 408"*|*"HTTP 429"*|*"HTTP 5"*|*"curl exit"*)
-        sleep "$tries"
+      *"HTTP 429"*)
+        retry_delay="$(python3 - "$response_headers" <<'PY'
+import math
+import re
+import sys
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from pathlib import Path
+
+headers_path = Path(sys.argv[1])
+if not headers_path.is_file():
+    raise SystemExit(1)
+
+retry_after = ""
+for line in headers_path.read_text(encoding="iso-8859-1", errors="replace").splitlines():
+    if line.lower().startswith("retry-after:"):
+        retry_after = line.split(":", 1)[1].strip()
+
+if re.fullmatch(r"\d+(?:\.\d+)?", retry_after):
+    print(max(0, math.ceil(float(retry_after))))
+elif retry_after:
+    try:
+        retry_at = parsedate_to_datetime(retry_after)
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        delay = (retry_at - datetime.now(timezone.utc)).total_seconds()
+        print(max(0, math.ceil(delay)))
+    except (TypeError, ValueError, OverflowError):
+        raise SystemExit(1)
+else:
+    raise SystemExit(1)
+PY
+        )" || retry_delay=''
+        if [[ ! "$retry_delay" =~ ^[0-9]+$ ]]; then
+          retry_delay=$((30 * 2 ** (tries - 1)))
+        fi
+        log "Groq rate limit; waiting ${retry_delay}s before retry."
+        sleep "$retry_delay"
+        ;;
+      *"HTTP 408"*|*"HTTP 5"*|*"curl exit"*)
+        retry_delay=$((5 * 2 ** (tries - 1)))
+        log "Temporary Groq error; waiting ${retry_delay}s before retry."
+        sleep "$retry_delay"
         ;;
     esac
   fi
