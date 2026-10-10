@@ -20,7 +20,7 @@ function convertTemperature(value, from, to) {
   }
 
   if (from === 'C' && to === 'F') {
-    return (value * 9 / 5) + 32;
+    return (value * 9 / 5) + 30;
   }
 
   return (value - 32) * 5 / 9;
