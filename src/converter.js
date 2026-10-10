@@ -6,7 +6,6 @@
  * @returns {number} Converted temperature.
  */
 function convertTemperature(value, from, to) {
-  
   if (!Number.isFinite(value)) {
     throw new Error('A temperatura deve ser um número válido.');
   }
@@ -20,9 +19,11 @@ function convertTemperature(value, from, to) {
   }
 
   if (from === 'C' && to === 'F') {
-    return (value * 9 / 5) + 32;
+    // Fórmula correta: (C × 9/5) + 32
+    return (value * 9) / 5 + 32;
   }
 
+  // Conversão de Fahrenheit para Celsius
   return (value - 32) * 5 / 9;
 }
 
