@@ -219,6 +219,7 @@ jobs:
       - name: Criar issue sem aplicar alterações do agente
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           MISSION: ${{ inputs.missao }}
           BASE_BRANCH: ${{ github.ref_name }}
           TARGET: ${{ needs.agente.outputs.alvo }}
