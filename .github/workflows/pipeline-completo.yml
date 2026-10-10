@@ -1,0 +1,156 @@
+name: Pipeline completo com revisão e aprovação humana
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - aula-4
+  pull_request:
+    branches:
+      - aula-4
+
+permissions:
+  contents: read
+
+jobs:
+  qualidade:
+    name: Qualidade
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Executar lint
+        run: npm run lint
+
+      - name: Executar testes
+        run: npm test -- --runInBand
+
+      - name: Verificar cobertura
+        run: npm run test:coverage -- --runInBand
+
+  seguranca:
+    name: SAST e revisão por IA
+    needs: qualidade
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout com histórico curto
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Executar verificações SAST fixas
+        run: |
+          python3 - <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          source_files = sorted(Path("src").rglob("*.js"))
+          rules = [
+              (re.compile(r"\beval\s*\("), "uso de eval()"),
+              (re.compile(r"\bnew\s+Function\s*\("), "construção dinâmica de função"),
+              (re.compile(r"\b(?:child_process|exec|spawn)\b"), "execução de processos"),
+              (
+                  re.compile(
+                      r"""(?i)(?:api[_-]?key|secret|token)\s*[:=]\s*['"][^'"]{12,}['"]"""
+                  ),
+                  "possível segredo hardcoded",
+              ),
+              (re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|gsk_[A-Za-z0-9]{20,})\b"), "token com formato conhecido"),
+          ]
+          findings = []
+          for path in source_files:
+              for line_number, line in enumerate(
+                  path.read_text(encoding="utf-8", errors="replace").splitlines(), 1
+              ):
+                  for pattern, description in rules:
+                      if pattern.search(line):
+                          findings.append(f"{path}:{line_number}: {description}")
+
+          if findings:
+              print("SAST encontrou padrões que exigem correção/revisão:", file=sys.stderr)
+              print("\n".join(findings), file=sys.stderr)
+              raise SystemExit(1)
+          print(f"SAST fixo aprovado: {len(source_files)} arquivo(s) JS de src/ verificados.")
+          PY
+
+      - name: Preparar código para revisão
+        run: |
+          if ! git diff HEAD~1 HEAD -- '*.js' > codigo_revisao.txt; then
+            : > codigo_revisao.txt
+          fi
+          if [[ ! -s codigo_revisao.txt ]]; then
+            for file in src/converter.js src/script.js; do
+              if [[ -f "$file" ]]; then
+                printf '\n--- %s ---\n' "$file" >> codigo_revisao.txt
+                cat "$file" >> codigo_revisao.txt
+              fi
+            done
+          fi
+
+      - name: Revisar código com Groq
+        id: ai_review
+        env:
+          TAREFA: >-
+            Revise o código JavaScript para problemas de segurança concretos.
+            Responda APROVAR somente se não identificar risco material; caso
+            contrário responda REPROVAR. O SAST fixo já é uma barreira separada.
+          ARQUIVO_DADOS: codigo_revisao.txt
+          OPCOES: APROVAR REPROVAR
+          OPCAO_SEGURA: REPROVAR
+          GROQCLOUD_API_KEY: ${{ secrets.GROQCLOUD_API_KEY }}
+        run: bash scripts/ia_decisao.sh
+
+      - name: Exigir aprovação da revisão por IA
+        env:
+          DECISION: ${{ steps.ai_review.outputs.decisao }}
+        run: |
+          if [[ "$DECISION" != APROVAR ]]; then
+            echo "::error::Revisão por IA não aprovou o código; a opção segura bloqueia a pipeline."
+            exit 1
+          fi
+
+  aprovacao:
+    name: Aprovação humana de produção
+    needs:
+      - qualidade
+      - seguranca
+    runs-on: ubuntu-latest
+    environment:
+      name: producao
+    steps:
+      - name: Registrar acionamento e aprovação
+        env:
+          ACTOR: ${{ github.actor }}
+          APPROVER: ${{ github.triggering_actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## Aprovação humana"
+            echo
+            echo "- Acionado por: ${ACTOR}"
+            echo "- Identidade associada ao disparo: ${APPROVER}"
+            echo "- Run: ${RUN_URL}"
+            echo "- Este job só aguarda revisão manual se o Environment \`producao\` exigir reviewers."
+            echo "- Confira no histórico do Environment quem aprovou; o contexto padrão do workflow identifica o disparador, não o reviewer."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Canary após aprovação
+    needs: aprovacao
+    permissions:
+      contents: read
+    uses: ./.github/workflows/canary.yml
+    with:
+      cenario: normal
+    secrets: inherit

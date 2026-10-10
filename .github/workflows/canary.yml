@@ -1,0 +1,184 @@
+name: Canary com rollback do conversor
+
+on:
+  workflow_dispatch:
+    inputs:
+      cenario:
+        description: Cenário da simulação controlada
+        required: true
+        type: choice
+        options:
+          - normal
+          - com_falha
+          - lentidao
+  workflow_call:
+    inputs:
+      cenario:
+        description: Cenário para chamada reutilizável
+        required: false
+        type: string
+        default: normal
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    env:
+      CENARIO: ${{ inputs.cenario || 'normal' }}
+    steps:
+      - name: Checkout com histórico
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Preparar e verificar versões estática
+        run: |
+          set -euo pipefail
+          if [[ "$CENARIO" != normal && "$CENARIO" != com_falha && "$CENARIO" != lentidao ]]; then
+            echo "::error::Cenário Canary inválido."
+            exit 1
+          fi
+          if ! git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+            echo "::error::Canary precisa de pelo menos dois commits na branch para usar HEAD~1."
+            exit 1
+          fi
+          git worktree add ../versao-estavel HEAD~1
+          mkdir -p "$RUNNER_TEMP/canary"
+          python3 scripts/servidor_estatico.py \
+            --port 8001 --directory ../versao-estavel/src \
+            >"$RUNNER_TEMP/canary/estavel.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/canary/estavel.pid"
+          delay_args=()
+          if [[ "$CENARIO" == lentidao ]]; then
+            delay_args+=(--progressive-delay)
+          fi
+          python3 scripts/servidor_estatico.py \
+            --port 8002 --directory src "${delay_args[@]}" \
+            >"$RUNNER_TEMP/canary/nova.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/canary/nova.pid"
+
+          ready=false
+          for attempt in $(seq 1 30); do
+            stable_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 2 http://127.0.0.1:8001/ || true)"
+            new_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 2 http://127.0.0.1:8002/ || true)"
+            if [[ "$stable_status" == 200 && "$new_status" == 200 ]]; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" != true ]]; then
+            echo "A página / de uma das versões não respondeu HTTP 200."
+            cat "$RUNNER_TEMP/canary/estavel.log" "$RUNNER_TEMP/canary/nova.log"
+            exit 1
+          fi
+          echo "As versões responderam HTTP 200 em /."
+
+      - name: Simular falha da versão nova
+        if: env.CENARIO == 'com_falha'
+        run: |
+          kill "$(cat "$RUNNER_TEMP/canary/nova.pid")"
+          echo "A versão nova foi interrompida após a verificação inicial."
+
+      - name: Executar canary progressivo e registrar rollback
+        env:
+          GROQCLOUD_API_KEY: ${{ secrets.GROQCLOUD_API_KEY }}
+        run: |
+          set -euo pipefail
+          history_file=metricas-historico.json
+          printf '[]\n' > "$history_file"
+          {
+            echo "## Resultado Canary"
+            echo
+            echo "| Etapa | Tráfego novo | Erros | Taxa de erro | p99 | Decisão | Responsável | Ação |"
+            echo "|---:|---:|---:|---:|---:|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          outcome=promovida
+          for percentage in 10 50 100; do
+            metrics_file="metricas-${percentage}.json"
+            bash scripts/medir.sh \
+              http://127.0.0.1:8001/ http://127.0.0.1:8002/ \
+              "$percentage" 100 "$metrics_file"
+            python3 - "$metrics_file" "$history_file" "$percentage" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          metrics_path, history_path, percentage = sys.argv[1:]
+          metrics = json.loads(Path(metrics_path).read_text(encoding="utf-8"))
+          history = json.loads(Path(history_path).read_text(encoding="utf-8"))
+          history.append({
+              "etapa_pct": int(percentage),
+              "pct_nova": metrics["pct_nova"],
+              "nova": metrics["nova"],
+              "estavel": metrics["estavel"],
+          })
+          Path(history_path).write_text(
+              json.dumps(history, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+            error_rate="$(python3 -c "import json; print(json.load(open('$metrics_file'))['nova']['taxa_erro_pct'])")"
+            p99="$(python3 -c "import json; print(json.load(open('$metrics_file'))['nova']['latencia_p99_ms'])")"
+            fixed_ok="$(python3 -c "import json; m=json.load(open('$metrics_file'))['nova']; print(str(m['taxa_erro_pct'] <= 5 and m['latencia_p99_ms'] <= 800).lower())")"
+            errors="$(python3 -c "import json; print(json.load(open('$metrics_file'))['nova']['erros'])")"
+
+            if [[ "$fixed_ok" != true ]]; then
+              printf '| %s | %s%% | %s | %s%% | %s ms | ROLLBACK | Regra fixa | Retorno imediato à versão estável |\n' \
+                "$percentage" "$percentage" "$errors" "$error_rate" "$p99" >> "$GITHUB_STEP_SUMMARY"
+              outcome="rollback-regra-fixa-${percentage}"
+              break
+            fi
+
+            TAREFA="Canary do conversor estático na etapa ${percentage}%. Revise a tendência no histórico JSON. Limites fixos já aprovados nesta etapa: erro <= 5% e p99 <= 800 ms. Escolha AVANCAR ou ROLLBACK." \
+            ARQUIVO_DADOS="$history_file" \
+            OPCOES="AVANCAR ROLLBACK" \
+            OPCAO_SEGURA="ROLLBACK" \
+            bash scripts/ia_decisao.sh
+            decision="$(cat ia_decisao.txt)"
+            reason="$(cat ia_justificativa.txt)"
+            reason="${reason//|/\\|}"
+            if [[ "$decision" == ROLLBACK ]]; then
+              printf '| %s | %s%% | %s | %s%% | %s ms | ROLLBACK | IA/opção segura | Retorno à estável; etapa afetada: %s%% |\n' \
+                "$percentage" "$percentage" "$errors" "$error_rate" "$p99" "$percentage" >> "$GITHUB_STEP_SUMMARY"
+              printf '\nJustificativa da etapa %s%%: %s\n' "$percentage" "$reason" >> "$GITHUB_STEP_SUMMARY"
+              outcome="rollback-ia-${percentage}"
+              break
+            fi
+            printf '| %s | %s%% | %s | %s%% | %s ms | AVANCAR | IA | Avançar para a próxima etapa |\n' \
+              "$percentage" "$percentage" "$errors" "$error_rate" "$p99" >> "$GITHUB_STEP_SUMMARY"
+            printf '\nJustificativa da etapa %s%%: %s\n' "$percentage" "$reason" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+          if [[ "$outcome" == promovida ]]; then
+            echo >> "$GITHUB_STEP_SUMMARY"
+            echo "A nova versão chegou a 100% no laboratório." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo >> "$GITHUB_STEP_SUMMARY"
+            echo "Rollback realizado: ${outcome}. O tráfego retorna à versão estável." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "Resultado Canary: $outcome"
+
+      - name: Guardar métricas e histórico
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: metricas-canary
+          path: |
+            metricas-*.json
+            metricas-historico.json
+          if-no-files-found: ignore
+
+      - name: Encerrar servidores e remover worktree
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/canary/estavel.pid" ]]; then
+            kill "$(cat "$RUNNER_TEMP/canary/estavel.pid")" 2>/dev/null || true
+          fi
+          if [[ -f "$RUNNER_TEMP/canary/nova.pid" ]]; then
+            kill "$(cat "$RUNNER_TEMP/canary/nova.pid")" 2>/dev/null || true
+          fi
+          git worktree remove --force ../versao-estavel 2>/dev/null || true

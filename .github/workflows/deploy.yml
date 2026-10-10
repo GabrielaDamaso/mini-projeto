@@ -1,0 +1,161 @@
+name: Deploy Blue/Green do conversor
+
+on:
+  workflow_dispatch:
+    inputs:
+      cenario:
+        description: Cenário local de laboratório
+        required: true
+        type: choice
+        options:
+          - normal
+          - com_falha
+
+permissions:
+  contents: read
+
+jobs:
+  blue-green:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout com histórico
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Preparar e verificar as duas versões estáticas
+        id: servers
+        env:
+          CENARIO: ${{ inputs.cenario }}
+        run: |
+          set -euo pipefail
+          if ! git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+            echo "::error::Blue/Green precisa de pelo menos dois commits na branch para usar HEAD~1."
+            exit 1
+          fi
+          git worktree add ../versao-estavel HEAD~1
+          mkdir -p "$RUNNER_TEMP/blue-green"
+          python3 scripts/servidor_estatico.py \
+            --port 8001 --directory ../versao-estavel/src \
+            >"$RUNNER_TEMP/blue-green/estavel.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/blue-green/estavel.pid"
+          python3 scripts/servidor_estatico.py \
+            --port 8002 --directory src \
+            >"$RUNNER_TEMP/blue-green/nova.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/blue-green/nova.pid"
+
+          ready=false
+          for attempt in $(seq 1 30); do
+            stable_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 2 http://127.0.0.1:8001/ || true)"
+            new_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 2 http://127.0.0.1:8002/ || true)"
+            if [[ "$stable_status" == 200 && "$new_status" == 200 ]]; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" != true ]]; then
+            echo "A página / de uma das versões não respondeu HTTP 200."
+            cat "$RUNNER_TEMP/blue-green/estavel.log" "$RUNNER_TEMP/blue-green/nova.log"
+            exit 1
+          fi
+          echo "As versões estável e nova responderam HTTP 200 em /."
+
+      - name: Simular falha da versão nova
+        if: inputs.cenario == 'com_falha'
+        run: |
+          set -euo pipefail
+          kill "$(cat "$RUNNER_TEMP/blue-green/nova.pid")"
+          echo "A versão nova foi interrompida após a verificação inicial."
+
+      - name: Medir 100% de tráfego candidato
+        id: measure
+        run: |
+          set -euo pipefail
+          bash scripts/medir.sh \
+            http://127.0.0.1:8001/ http://127.0.0.1:8002/ \
+            100 200 metricas.json
+          erro="$(python3 -c 'import json; print(json.load(open("metricas.json"))["nova"]["taxa_erro_pct"])')"
+          p99="$(python3 -c 'import json; print(json.load(open("metricas.json"))["nova"]["latencia_p99_ms"])')"
+          aprovado="$(python3 -c 'import json; m=json.load(open("metricas.json"))["nova"]; print(str(m["taxa_erro_pct"] <= 5 and m["latencia_p99_ms"] <= 800).lower())')"
+          {
+            echo "erro=$erro"
+            echo "p99=$p99"
+            echo "aprovado=$aprovado"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Regra fixa antes da IA
+        id: fixed
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.measure.outputs.aprovado }}" == true ]]; then
+            echo "approved=true" >> "$GITHUB_OUTPUT"
+            echo "Regra fixa aprovada: erro ≤ 5% e p99 ≤ 800 ms."
+          else
+            echo "approved=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Deploy bloqueado pela regra fixa antes de consultar a IA."
+          fi
+
+      - name: Avaliar promoção com Groq
+        id: decision
+        if: steps.fixed.outputs.approved == 'true'
+        env:
+          TAREFA: >-
+            Deploy Blue/Green do conversor estático Celsius/Fahrenheit.
+            Avalie as métricas da versão nova. Limites: erro <= 5% e p99 <= 800 ms.
+            Responda PROMOVER somente se a versão puder receber 100% do tráfego.
+          ARQUIVO_DADOS: metricas.json
+          OPCOES: PROMOVER MANTER
+          OPCAO_SEGURA: MANTER
+          GROQCLOUD_API_KEY: ${{ secrets.GROQCLOUD_API_KEY }}
+        run: bash scripts/ia_decisao.sh
+
+      - name: Resumo da decisão e do estado do deploy
+        if: always() && steps.measure.outcome == 'success'
+        env:
+          APPROVED: ${{ steps.fixed.outputs.approved }}
+          ERROR_RATE: ${{ steps.measure.outputs.erro }}
+          P99: ${{ steps.measure.outputs.p99 }}
+          AI_DECISION: ${{ steps.decision.outputs.decisao }}
+          AI_REASON: ${{ steps.decision.outputs.justificativa }}
+        run: |
+          {
+            echo "## Resultado Blue/Green"
+            echo
+            echo "| Tráfego novo | Erros | Taxa de erro | p99 | Decisão | Responsável | Ação |"
+            echo "|---:|---:|---:|---:|---|---|---|"
+            if [[ "$APPROVED" == true ]]; then
+              if [[ "$AI_DECISION" == PROMOVER ]]; then
+                echo "| 100% | — | ${ERROR_RATE}% | ${P99} ms | PROMOVER | IA após regra fixa | Nova versão aprovada no laboratório |"
+                echo
+                echo "A promoção é uma simulação local no runner; não publica infraestrutura externa."
+              else
+                reason="${AI_REASON:-A IA não aprovou; aplicada a opção segura.}"
+                reason="${reason//|/\\|}"
+                echo "| 100% | — | ${ERROR_RATE}% | ${P99} ms | ${AI_DECISION:-MANTER} | IA/opção segura | Mantida a versão estável |"
+                echo
+                echo "Justificativa: ${reason}"
+              fi
+            else
+              echo "| 100% | — | ${ERROR_RATE}% | ${P99} ms | BLOQUEAR | Regra fixa | Mantida a versão estável; IA não consultada |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Guardar métricas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: metricas-blue-green
+          path: metricas.json
+          if-no-files-found: ignore
+
+      - name: Encerrar servidores e remover worktree
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/blue-green/estavel.pid" ]]; then
+            kill "$(cat "$RUNNER_TEMP/blue-green/estavel.pid")" 2>/dev/null || true
+          fi
+          if [[ -f "$RUNNER_TEMP/blue-green/nova.pid" ]]; then
+            kill "$(cat "$RUNNER_TEMP/blue-green/nova.pid")" 2>/dev/null || true
+          fi
+          git worktree remove --force ../versao-estavel 2>/dev/null || true

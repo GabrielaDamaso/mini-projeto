@@ -2,3 +2,8 @@ node_modules/
 coverage/
 .DS_Store
 *.log
+.env
+/ia_decisao.txt
+/ia_justificativa.txt
+/codigo_revisao.txt
+/metricas*.json
