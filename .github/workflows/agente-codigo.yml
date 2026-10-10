@@ -1,0 +1,263 @@
+name: Agente de IA que altera código
+
+on:
+  workflow_dispatch:
+    inputs:
+      missao:
+        description: Missão limitada do agente
+        required: true
+        type: choice
+        options:
+          - corrigir_bug
+          - aumentar_cobertura
+
+permissions:
+  contents: read
+
+jobs:
+  agente:
+    name: Executar agente com limites
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      resultado: ${{ steps.agent.outputs.resultado }}
+      tentativas: ${{ steps.agent.outputs.tentativas }}
+      alvo: ${{ steps.agent.outputs.alvo }}
+      explicacao: ${{ steps.agent.outputs.explicacao }}
+      erro_final: ${{ steps.agent.outputs.erro_final }}
+    steps:
+      - name: Recusar uso direto na branch principal
+        if: github.ref_name == 'main'
+        run: |
+          echo "::error::Selecione uma branch de laboratório; a branch main não é permitida."
+          exit 1
+
+      - name: Checkout da branch selecionada
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Validar sintaxe do agente
+        run: bash -n scripts/agente_codigo.sh
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Executar agente limitado
+        id: agent
+        env:
+          AGENT_MISSION: ${{ inputs.missao }}
+          GROQCLOUD_API_KEY: ${{ secrets.GROQCLOUD_API_KEY }}
+          GROQ_MODEL: ${{ vars.GROQ_MODEL || 'openai/gpt-oss-120b' }}
+        run: bash scripts/agente_codigo.sh
+
+      - name: Empacotar somente o arquivo aprovado
+        if: steps.agent.outputs.resultado == 'alterado'
+        env:
+          TARGET: ${{ steps.agent.outputs.alvo }}
+          ARCHIVE: ${{ runner.temp }}/agent-target.tar
+        run: |
+          set -euo pipefail
+          tar -cf "$ARCHIVE" -- "$TARGET"
+
+      - name: Transferir arquivo aprovado ao job de PR
+        if: steps.agent.outputs.resultado == 'alterado'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agente-target-${{ github.run_id }}
+          path: ${{ runner.temp }}/agent-target.tar
+          if-no-files-found: error
+
+  pull-request:
+    name: Abrir PR para revisão humana
+    needs: agente
+    if: needs.agente.outputs.resultado == 'alterado'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout da branch selecionada
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Baixar proposta do agente
+        uses: actions/download-artifact@v4
+        with:
+          name: agente-target-${{ github.run_id }}
+          path: ${{ runner.temp }}/agent-artifact
+
+      - name: Criar branch e commit somente com o alvo
+        id: commit
+        env:
+          MISSION: ${{ inputs.missao }}
+          TARGET: ${{ needs.agente.outputs.alvo }}
+          RUN_ID: ${{ github.run_id }}
+          ARCHIVE: ${{ runner.temp }}/agent-artifact/agent-target.tar
+        run: |
+          set -euo pipefail
+          archive_entries="$(tar -tf "$ARCHIVE")"
+          if [[ "$archive_entries" != "$TARGET" ]]; then
+            echo "::error::O artefato contém arquivos além do alvo autorizado."
+            exit 1
+          fi
+          tar -xf "$ARCHIVE" -C "$GITHUB_WORKSPACE" -- "$TARGET"
+          branch_name="agente-ia/${MISSION}-${RUN_ID}"
+          git switch -c "$branch_name"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "$TARGET"
+          staged_files="$(git diff --cached --name-only)"
+          if [[ "$staged_files" != "$TARGET" ]]; then
+            echo "::error::O commit do agente deve conter somente o arquivo-alvo."
+            exit 1
+          fi
+          git commit -m "Proposta da IA: ${MISSION}"
+          git push --set-upstream origin "$branch_name"
+          git show --format= -- "$TARGET" > "$RUNNER_TEMP/agent-diff.txt"
+          echo "branch=$branch_name" >> "$GITHUB_OUTPUT"
+
+      - name: Abrir Pull Request sem aprovar ou fazer merge
+        id: create-pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MISSION: ${{ inputs.missao }}
+          BASE_BRANCH: ${{ github.ref_name }}
+          SOURCE_BRANCH: ${{ steps.commit.outputs.branch }}
+          TARGET: ${{ needs.agente.outputs.alvo }}
+          EXPLANATION: ${{ needs.agente.outputs.explicacao }}
+          ATTEMPTS: ${{ needs.agente.outputs.tentativas }}
+          MODEL: ${{ vars.GROQ_MODEL || 'openai/gpt-oss-120b' }}
+          DIFF_FILE: ${{ runner.temp }}/agent-diff.txt
+        run: |
+          set -euo pipefail
+          case "$MISSION" in
+            corrigir_bug)
+              objective="Corrigir src/converter.js sem alterar os testes."
+              verification='npm test -- --runInBand'
+              ;;
+            aumentar_cobertura)
+              objective="Criar testes de interface para src/script.js com cobertura isolada mínima de 70%."
+              verification='npx jest --config jest.agente.config.js --coverage --runInBand'
+              ;;
+            *)
+              echo "::error::Missão inesperada."
+              exit 1
+              ;;
+          esac
+          export OBJECTIVE="$objective"
+          export VERIFICATION="$verification"
+          python3 - "$RUNNER_TEMP/pull-request-body.md" <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+
+          diff = Path(os.environ["DIFF_FILE"]).read_text(encoding="utf-8", errors="replace")
+          body = f"""## Objetivo
+          {os.environ["OBJECTIVE"]}
+
+          ## Explicação retornada pelo agente
+          {os.environ["EXPLANATION"]}
+
+          ## Verificação executada
+          `{os.environ["VERIFICATION"]}`
+
+          - Tentativas do agente: {os.environ["ATTEMPTS"]}
+          - Modelo: {os.environ["MODEL"]}
+          - Alvo: `{os.environ["TARGET"]}`
+          - Branch-base: `{os.environ["BASE_BRANCH"]}`
+
+          ## Diff proposto
+          ```diff
+          {diff}
+          ```
+
+          **Revisão humana obrigatória:** confira o diff e os resultados dos testes. Este agente não aprova nem faz merge.
+          """
+          Path(sys.argv[1]).write_text(body, encoding="utf-8")
+          PY
+          pr_url="$(gh pr create \
+            --base "$BASE_BRANCH" \
+            --head "$SOURCE_BRANCH" \
+            --title "Proposta de agente IA: ${MISSION}" \
+            --body-file "$RUNNER_TEMP/pull-request-body.md")"
+          if [[ ! "$pr_url" =~ ^https://github\.com/.+/pull/[0-9]+$ ]]; then
+            echo "::error::gh pr create did not return a valid PR URL."
+            exit 1
+          fi
+          echo "$pr_url"
+          printf 'url=%s\n' "$pr_url" >> "$GITHUB_OUTPUT"
+
+      - name: Registrar PR no Summary
+        env:
+          PR_URL: ${{ steps.create-pr.outputs.url }}
+        run: |
+          {
+            echo "## Entrega do agente"
+            echo
+            echo "Pull Request para revisão humana: ${PR_URL}"
+            echo "Nenhum merge foi realizado."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  falha:
+    name: Abrir issue para análise humana
+    needs: agente
+    if: needs.agente.outputs.resultado == 'falhou'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Criar issue sem aplicar alterações do agente
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MISSION: ${{ inputs.missao }}
+          BASE_BRANCH: ${{ github.ref_name }}
+          TARGET: ${{ needs.agente.outputs.alvo }}
+          ATTEMPTS: ${{ needs.agente.outputs.tentativas }}
+          FINAL_ERROR: ${{ needs.agente.outputs.erro_final }}
+        run: |
+          set -euo pipefail
+          if [[ "$MISSION" == corrigir_bug ]]; then
+            objective="Corrigir o bug em src/converter.js sem modificar tests/converter.test.js."
+          else
+            objective="Criar testes de interface úteis para src/script.js com pelo menos 70% de cobertura isolada."
+          fi
+          export OBJECTIVE="$objective"
+          python3 - "$RUNNER_TEMP/agent-issue.md" <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+
+          body = f"""## Missão
+          {os.environ["MISSION"]}
+
+          ## Objetivo
+          {os.environ["OBJECTIVE"]}
+
+          - Branch selecionada: `{os.environ["BASE_BRANCH"]}`
+          - Alvo: `{os.environ["TARGET"]}`
+          - Tentativas realizadas: {os.environ["ATTEMPTS"]}
+          - Erro final: {os.environ["FINAL_ERROR"]}
+
+          Nenhuma alteração do agente foi mantida no worktree. É necessária análise humana antes de qualquer nova tentativa.
+          """
+          Path(sys.argv[1]).write_text(body, encoding="utf-8")
+          PY
+          issue_url="$(gh issue create \
+            --title "Agente de código precisa de revisão: ${MISSION}" \
+            --body-file "$RUNNER_TEMP/agent-issue.md")"
+          {
+            echo "## Falha do agente"
+            echo
+            echo "O alvo foi restaurado e nenhuma alteração do agente foi mantida."
+            echo "Issue para análise humana: ${issue_url}"
+          } >> "$GITHUB_STEP_SUMMARY"

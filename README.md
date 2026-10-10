@@ -78,6 +78,44 @@ O laboratório mantém o conversor estático e simula dois servidores locais no 
 - A comparação de prompt injection demonstra redução de risco, não garantia de que um modelo nunca seguirá instruções maliciosas.
 - A medição do site estático é uma simulação local do workflow e não representa infraestrutura ou tráfego real de produção.
 
+## Agente que altera código
+
+O workflow manual `.github/workflows/agente-codigo.yml` oferece as missões `corrigir_bug` e `aumentar_cobertura`. O agente verifica primeiro a missão, consulta a Groq somente se a verificação falhar e pode propor conteúdo completo para um único arquivo permitido. O script limita a três tentativas, rejeita respostas malformadas e padrões perigosos, verifica a proposta e restaura o alvo se não conseguir aprovação nos testes. Sucesso cria um PR para a branch selecionada; falha após as tentativas cria uma issue. O agente não faz merge.
+
+Antes de executar, habilite **Settings → Actions → General → Workflow permissions → Read and write permissions** e **Allow GitHub Actions to create and approve pull requests**, confirme o secret `GROQCLOUD_API_KEY` e execute em uma branch experimental selecionada no controle de branch do GitHub Actions. Não execute missões experimentais diretamente em `main`. Os experimentos A–E devem usar branches separadas baseadas em `main`, conforme [PRD_DESAFIO_AGENTE_CODIGO.md](./PRD_DESAFIO_AGENTE_CODIGO.md). O agente envia à API o arquivo-alvo, contexto somente leitura e a saída recente da verificação (com limites de tamanho); conteúdo com formato reconhecido de segredo é bloqueado antes do envio.
+
+Para demonstrar `corrigir_bug`, crie `agente-bug` a partir de `main`, altere temporariamente `+ 32` para `+ 30` em `src/converter.js`, confirme que `npm test -- --runInBand` falha e publique essa branch experimental. Depois execute **Actions → Agente de IA que altera código → Run workflow**, selecionando `agente-bug` e `corrigir_bug`. Para `aumentar_cobertura`, crie `agente-testes` a partir de `main`, mantenha `jest.agente.config.js` e confirme que `tests/gerado-ia.test.js` ainda não existe antes do run. Esses passos de preparação não devem ser feitos em `main`.
+
+PRs das missões — preencher somente após criação de PRs reais:
+
+- `corrigir_bug`: **Preencher após execução**.
+- `aumentar_cobertura`: **Preencher após execução**.
+
+| Experimento | Ação realizada | Comportamento observado | Link real do run |
+|---|---|---|---|
+| A — Nada a fazer | Preencher após execução | Preencher após execução | Preencher após execução |
+| B — Bug impossível | Preencher após execução | Preencher após execução | Preencher após execução |
+| C — Prompt injection no código | Preencher após execução | Preencher após execução | Preencher após execução |
+| D — Área proibida | Preencher após execução | Preencher após execução | Preencher após execução |
+| E — Arquivo acima de 12.000 bytes | Preencher após execução | Preencher após execução | Preencher após execução |
+
+Para D e E, em uma branch descartável, adicione temporariamente `AGENT_TARGET_OVERRIDE` ao ambiente do step “Executar agente limitado” no workflow: use um caminho em `.github/workflows/` para D e um arquivo `.js` com mais de 12.000 bytes sob `src/` para E. Execute a missão, confirme que o script recusa o alvo antes de qualquer chamada à API e reverta a configuração/arquivo temporário na branch. Não faça merge dessas alterações de experimento.
+
+### Reflexão
+
+- **Faria merge sem ler o diff?** Não. A revisão humana confere intenção, segurança, compatibilidade e qualidade que os testes podem não cobrir.
+- **Quem responde por um problema após o merge?** A responsabilidade é das pessoas que mantêm, aprovam e integram o sistema; a IA não substitui a responsabilidade profissional.
+- **Por que os testes não podem mudar em `corrigir_bug`?** Eles definem o comportamento esperado e precisam julgar a correção sem o agente alterar o critério para fazê-la passar.
+- **O que faltaria para merge autônomo?** Evidências mais amplas, revisão independente, controles de proveniência, segurança e rollback. Mesmo assim, autonomia só seria cogitável em mudanças pequenas, reversíveis e de baixo risco, com governança explícita.
+- **Que dados são enviados à API? Usaria código empresarial?** São enviados o alvo, os contextos definidos e a falha recente, limitados pelo script; não enviaria código empresarial sem autorização, avaliação do fornecedor e remoção de dados sensíveis.
+
+### Demonstração breve
+
+1. Em branch experimental, introduza e confirme um bug pequeno sem alterar os testes; mostre que a suíte falha.
+2. Dispare o workflow com `corrigir_bug`; apresente Summary, tentativas e PR proposto.
+3. Leia o diff e confira os testes antes de qualquer merge manual.
+4. Mostre um experimento real de trava A–E e complete a tabela somente com observações e links existentes.
+
 ## Estrutura
 
 ```text
@@ -95,8 +133,11 @@ conversor-temperaturas/
 │       ├── deploy.yml
 │       ├── canary.yml
 │       ├── pipeline-completo.yml
-│       └── prompt-injection.yml
+│       ├── prompt-injection.yml
+│       └── agente-codigo.yml
+├── jest.agente.config.js
 ├── scripts/
+│   ├── agente_codigo.sh
 │   ├── ia_decisao.sh
 │   ├── medir.sh
 │   ├── servidor_estatico.py
